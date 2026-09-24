@@ -1,28 +1,35 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
+import {
+  useCreateTaskMutation,
+  useDeleteTaskMutation,
+  useGetTasksQuery,
+  useUpdateTaskMutation,
+  type TaskItem,
+} from "../services/tasksApi";
 
 type TaskStatus = "pending" | "completed";
 type TaskPriority = "low" | "medium" | "high";
 type TaskFilter = "all" | "pending" | "completed";
 
-type Task = {
-  id: string;
-  title: string;
-  description: string;
+type Task = Omit<TaskItem, "priority" | "status"> & {
   priority: TaskPriority;
   status: TaskStatus;
-  createdAt: string;
 };
 
 function Tasks() {
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    const savedTasks = localStorage.getItem("smartlife_tasks");
+  // GET /api/Tasks
+  const { data: tasksData, isLoading, isError } = useGetTasksQuery();
 
-    if (savedTasks) {
-      return JSON.parse(savedTasks);
-    }
+  // POST /api/Tasks
+  const [createTask] = useCreateTaskMutation();
 
-    return [];
-  });
+  // PUT /api/Tasks/{id}
+  const [updateTask] = useUpdateTaskMutation();
+
+  // DELETE /api/Tasks/{id}
+  const [deleteTask] = useDeleteTaskMutation();
+
+  const tasks = (tasksData ?? []) as Task[];
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -33,65 +40,80 @@ function Tasks() {
 
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
 
-  useEffect(() => {
-    localStorage.setItem("smartlife_tasks", JSON.stringify(tasks));
-  }, [tasks]);
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!title.trim()) {
       return;
     }
 
-    if (editingTaskId) {
-      setTasks((prevTasks) =>
-        prevTasks.map((task) =>
-          task.id === editingTaskId
-            ? {
-                ...task,
-                title: title.trim(),
-                description: description.trim(),
-                priority,
-              }
-            : task,
-        ),
-      );
+    try {
+      if (editingTaskId) {
+        const existingTask = tasks.find((task) => task.id === editingTaskId);
 
-      setEditingTaskId(null);
-    } else {
-      const newTask: Task = {
-        id: crypto.randomUUID(),
-        title: title.trim(),
-        description: description.trim(),
-        priority,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-      };
+        if (!existingTask) {
+          return;
+        }
 
-      setTasks((prevTasks) => [newTask, ...prevTasks]);
+        await updateTask({
+          id: editingTaskId,
+          task: {
+            title: title.trim(),
+            description: description.trim(),
+            priority,
+            status: existingTask.status,
+          },
+        }).unwrap();
+
+        setEditingTaskId(null);
+      } else {
+        await createTask({
+          title: title.trim(),
+          description: description.trim(),
+          priority,
+          status: "pending",
+        }).unwrap();
+      }
+
+      setTitle("");
+      setDescription("");
+      setPriority("medium");
+    } catch (error) {
+      console.error("Failed to save task:", error);
+    }
+  }
+
+  async function handleDelete(taskId: string) {
+    try {
+      await deleteTask(taskId).unwrap();
+    } catch (error) {
+      console.error("Failed to delete task:", error);
+    }
+  }
+
+  async function handleToggleStatus(taskId: string) {
+    const task = tasks.find((task) => task.id === taskId);
+
+    if (!task) {
+      return;
     }
 
-    setTitle("");
-    setDescription("");
-    setPriority("medium");
-  }
+    const newStatus: TaskStatus =
+      task.status === "pending" ? "completed" : "pending";
 
-  function handleDelete(taskId: string) {
-    setTasks((prevTasks) => prevTasks.filter((task) => task.id !== taskId));
-  }
-
-  function handleToggleStatus(taskId: string) {
-    setTasks((prevTasks) =>
-      prevTasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              status: task.status === "pending" ? "completed" : "pending",
-            }
-          : task,
-      ),
-    );
+    try {
+      await updateTask({
+        id: task.id,
+        task: {
+          title: task.title,
+          description: task.description,
+          priority: task.priority,
+          status: newStatus,
+        },
+      }).unwrap();
+    } catch (error) {
+      console.error("Failed to update task status:", error);
+    }
   }
 
   function handleEdit(task: Task) {
@@ -109,9 +131,11 @@ function Tasks() {
   }
 
   const totalTasks = tasks.length;
+
   const completedTasks = tasks.filter(
     (task) => task.status === "completed",
   ).length;
+
   const pendingTasks = tasks.filter((task) => task.status === "pending").length;
 
   const filteredTasks = tasks.filter((task) => {
@@ -134,6 +158,16 @@ function Tasks() {
     }
 
     return "bg-green-400/10 text-green-300";
+  }
+
+  if (isLoading) {
+    return <p className="text-slate-400">Loading tasks...</p>;
+  }
+
+  if (isError) {
+    return (
+      <p className="text-red-300">Failed to load tasks from the backend.</p>
+    );
   }
 
   return (
